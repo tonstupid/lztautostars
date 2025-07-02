@@ -89,7 +89,7 @@ class Config:
             "forum_thread_id": input("Введите ID темы на форуме для отслеживания: "),
             "stars_count": 3,
             "check_interval": 30,
-            "api_delay": 5,
+            "api_delay": 7,
             "max_retries": 3,
             "processed_posts_file": "processed_posts.json",
             "enable_reply": True,
