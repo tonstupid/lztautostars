@@ -87,13 +87,13 @@ class Config:
             "phone_number": input("Введите ваш номер телефона (в международном формате, +...): "),
             "lolz_token": input("Введите ваш Lolzteam API токен: "),
             "forum_thread_id": input("Введите ID темы на форуме для отслеживания: "),
-            "stars_count": 1,
-            "check_interval": 60,
-            "api_delay": 0.5,
-            "max_retries": 1,
+            "stars_count": 3,
+            "check_interval": 30,
+            "api_delay": 5,
+            "max_retries": 3,
             "processed_posts_file": "processed_posts.json",
             "enable_reply": True,
-            "reply_templates": ["Готово", "Отправил"],
+            "reply_templates": ["Готово! Отправил звезды. ⭐", "Выполнено.", "Сделал.", "+rep"],
         }
         with open(self.config_file, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=4, ensure_ascii=False)
@@ -135,7 +135,7 @@ class LolzAPI:
         self.base_url = "https://prod-api.lolz.live"
         self.headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    async def _request(self, method: str, endpoint: str, **kwargs) -> Optional[Dict[str, Any]]:
+    async def _request(self, method: str, endpoint: str, is_retry: bool = False, **kwargs) -> Optional[Dict[str, Any]]:
         url = f"{self.base_url}{endpoint}"
         try:
             async with aiohttp.ClientSession() as session:
@@ -144,6 +144,12 @@ class LolzAPI:
                         return await response.json()
                     
                     error_text = await response.text()
+                    
+                    if response.status == 403 and "Необходимо подождать" in error_text and not is_retry:
+                        logger.warning("Обнаружен флуд-контроль API. Ожидание 3 секунды перед повторной попыткой...")
+                        await asyncio.sleep(3)
+                        return await self._request(method, endpoint, is_retry=True, **kwargs)
+                    
                     if response.status == 429:
                         logger.warning("Превышен лимит запросов к API, ожидание 10 секунд...")
                         await asyncio.sleep(10)
@@ -311,7 +317,7 @@ class TelegramStarsBot:
             logger.info("Бот остановлен.")
 
 def main():
-    parser = argparse.ArgumentParser(description='Telegram Stars UserBot LZT')
+    parser = argparse.ArgumentParser(description='Telegram Stars Bot для Lolzteam')
     parser.add_argument('--thread-id', type=str, help='ID темы форума (переопределяет config.json)')
     parser.add_argument('--reset-config', action='store_true', help='Запустить мастер настройки заново')
     args = parser.parse_args()
