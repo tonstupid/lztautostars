@@ -89,7 +89,7 @@ class Config:
             "forum_thread_id": input("Введите ID темы на форуме для отслеживания: "),
             "stars_count": 3,
             "check_interval": 30,
-            "api_delay": 7,
+            "api_delay": 5,
             "max_retries": 3,
             "processed_posts_file": "processed_posts.json",
             "enable_reply": True,
@@ -161,12 +161,23 @@ class LolzAPI:
             return None
 
     async def get_thread_posts(self, thread_id: Union[str, int]) -> List[Dict[str, Any]]:
-        params = {"thread_id": thread_id, "page": 1, "order": "post_date_reverse"}
-        data = await self._request("GET", "/posts", params=params)
-        posts = data.get("posts", []) if data else []
-        if posts:
-            logger.info(f"Получено {len(posts)} постов из темы {thread_id}.")
-        return posts
+        all_posts = []
+        page = 1
+        while True:
+            params = {"thread_id": thread_id, "page": page, "order": "post_date_reverse"}
+            data = await self._request("GET", "/posts", params=params)
+            posts = data.get("posts", []) if data else []
+            if not posts:
+                break
+            all_posts.extend(posts)
+            logger.info(f"Получено {len(posts)} постов из темы {thread_id} на странице {page}.")
+            page += 1
+            await asyncio.sleep(1)
+        if all_posts:
+            logger.info(f"Всего получено {len(all_posts)} постов из темы {thread_id}.")
+        else:
+            logger.info(f"Постов в теме {thread_id} не найдено.")
+        return all_posts
 
     async def create_comment(self, post_id: int, comment_body: str) -> bool:
         payload = {"comment_body": comment_body}
