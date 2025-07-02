@@ -5,4 +5,4 @@ Telegram-юзербот для раздачи Telegram Stars на форуме l
 python3.11 bot.py --reset-config
 
 # Сменить ID темы на форуме для отслеживания
-python3.11 --thread-id
+python3.11 bot.py --thread-id
