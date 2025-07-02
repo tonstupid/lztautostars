@@ -160,9 +160,9 @@ class LolzAPI:
             logger.error(f"Ошибка соединения с API: {e}")
             return None
 
-    async def get_thread_posts(self, thread_id: Union[str, int]) -> List[Dict[str, Any]]:
+    async def get_thread_posts(self, thread_id: Union[str, int], start_page: int = 1) -> List[Dict[str, Any]]:
         all_posts = []
-        page = 1
+        page = start_page
         while True:
             params = {"thread_id": thread_id, "page": page, "order": "post_date_reverse"}
             data = await self._request("GET", "/posts", params=params)
@@ -217,6 +217,7 @@ class TelegramStarsBot:
         self.lolz_api = LolzAPI(config.lolz_token)
         self.processed_manager = ProcessedPostsManager(config.processed_posts_file)
         self.client: Optional[Client] = None
+        self.start_page: int = 1
 
     async def send_stars_reaction(self, channel: str, message_id: int) -> bool:
         if not hasattr(self.client, 'send_paid_reaction'):
@@ -280,8 +281,8 @@ class TelegramStarsBot:
     async def _main_loop(self):
         while True:
             try:
-                logger.info(f"Проверка новых постов в теме {self.config.forum_thread_id}...")
-                posts = await self.lolz_api.get_thread_posts(self.config.forum_thread_id)
+                logger.info(f"Проверка новых постов в теме {self.config.forum_thread_id} начиная со страницы {self.start_page}...")
+                posts = await self.lolz_api.get_thread_posts(self.config.forum_thread_id, self.start_page)
                 
                 if posts:
                     for post in reversed(posts):
@@ -304,6 +305,16 @@ class TelegramStarsBot:
         
         if is_first_login:
             logger.info("Сессия Telegram не найдена. Запускаю процесс входа...")
+        else:
+            start_page_input = input("Введите номер страницы для начала проверки (или нажмите Enter для проверки с первой страницы): ")
+            try:
+                self.start_page = int(start_page_input) if start_page_input.strip() else 1
+                if self.start_page < 1:
+                    logger.error("Номер страницы должен быть положительным. Использую первую страницу.")
+                    self.start_page = 1
+            except ValueError:
+                logger.error("Введено некорректное значение. Использую первую страницу.")
+                self.start_page = 1
 
         self.client = Client(self.SESSION_NAME, self.config.api_id, self.config.api_hash)
         
@@ -318,6 +329,7 @@ class TelegramStarsBot:
 
             logger.info("=" * 40)
             logger.info(f"Комментарии на форуме: {'ВКЛЮЧЕНЫ' if self.config.enable_reply else 'ВЫКЛЮЧЕНЫ'}")
+            logger.info(f"Проверка начинается со страницы: {self.start_page}")
             logger.info("Бот в работе. Для остановки нажмите Ctrl+C.")
             logger.info("=" * 40)
             await self._main_loop()
