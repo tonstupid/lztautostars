@@ -130,6 +130,11 @@ class ProcessedPostsManager:
         self.processed_posts.add(post_id)
         self._save()
 
+    def add_existing_posts(self, post_ids: List[int]):
+        for post_id in post_ids:
+            self.processed_posts.add(post_id)
+        self._save()
+
 class LolzAPI:
     def __init__(self, token: str):
         self.base_url = "https://prod-api.lolz.live"
@@ -179,6 +184,21 @@ class LolzAPI:
             logger.info(f"Постов в теме {thread_id} не найдено.")
         return all_posts
 
+    async def get_all_thread_posts(self, thread_id: Union[str, int]) -> List[Dict[str, Any]]:
+        all_posts = []
+        page = 1
+        while True:
+            params = {"thread_id": thread_id, "page": page}
+            data = await self._request("GET", "/posts", params=params)
+            posts = data.get("posts", []) if data else []
+            if not posts:
+                break
+            all_posts.extend(posts)
+            logger.info(f"Получено {len(posts)} постов из темы {thread_id} на странице {page}.")
+            page += 1
+            await asyncio.sleep(1)
+        return all_posts
+
     async def create_comment(self, post_id: int, comment_body: str) -> bool:
         payload = {"comment_body": comment_body}
         logger.info(f"Публикую комментарий к посту {post_id}...")
@@ -203,10 +223,12 @@ class TelegramLinkExtractor:
         return list(all_matches)
 
     @staticmethod
-    def parse(link: str) -> Optional[tuple[str, int]]:
-        match = re.search(r't\.me/([^/]+)/(\d+)', link)
+    def parse(link: str) -> Optional[tuple[str, Optional[int]]]:
+        match = re.search(r't\.me/([^/]+)(?:/(\d+))?', link)
         if match:
-            return match.group(1), int(match.group(2))
+            channel = match.group(1)
+            message_id = int(match.group(2)) if match.group(2) else None
+            return channel, message_id
         return None
 
 class TelegramStarsBot:
@@ -219,7 +241,18 @@ class TelegramStarsBot:
         self.client: Optional[Client] = None
         self.start_page: int = 1
 
-    async def send_stars_reaction(self, channel: str, message_id: int) -> bool:
+    async def parse_existing_posts(self):
+        logger.info("Начинаю парсинг всех существующих постов в теме...")
+        all_posts = await self.lolz_api.get_all_thread_posts(self.config.forum_thread_id)
+        
+        if all_posts:
+            post_ids = [post.get("post_id") for post in all_posts if post.get("post_id")]
+            self.processed_manager.add_existing_posts(post_ids)
+            logger.success(f"Добавлено {len(post_ids)} постов в список обработанных.")
+        else:
+            logger.info("Не найдено постов для добавления в обработанные.")
+
+    async def send_stars_reaction(self, channel: str, message_id: Optional[int] = None) -> bool:
         if not hasattr(self.client, 'send_paid_reaction'):
             logger.error("Платные реакции недоступны. Отправка 'звезд' невозможна.")
             return False
@@ -227,6 +260,15 @@ class TelegramStarsBot:
         try:
             for attempt in range(self.config.max_retries):
                 try:
+                    if message_id is None:
+                        async for message in self.client.get_chat_history(f"@{channel}", limit=1):
+                            message_id = message.id
+                            break
+                        
+                        if message_id is None:
+                            logger.error(f"Не удалось найти сообщения в канале @{channel}")
+                            return False
+                    
                     await self.client.send_paid_reaction(f"@{channel}", message_id, self.config.stars_count)
                     logger.success(f"Отправлено {self.config.stars_count} звезд в @{channel}/{message_id}")
                     return True
@@ -244,6 +286,8 @@ class TelegramStarsBot:
 
     async def _process_single_post(self, post: Dict[str, Any]):
         post_id = post.get("post_id")
+        post_user_id = post.get("poster_user_id")
+        
         if not post_id or self.processed_manager.is_processed(post_id):
             return
 
@@ -273,6 +317,10 @@ class TelegramStarsBot:
         if successful_reactions > 0 and self.config.enable_reply:
             await asyncio.sleep(self.config.api_delay)
             reply_message = random.choice(self.config.reply_templates)
+            
+            if post_user_id:
+                reply_message = f"[userids={post_user_id};align=left]{reply_message}[/userids]"
+            
             await self.lolz_api.create_comment(post_id, reply_message)
 
         logger.info(f"Пост {post_id} полностью обработан.")
@@ -306,6 +354,16 @@ class TelegramStarsBot:
         if is_first_login:
             logger.info("Сессия Telegram не найдена. Запускаю процесс входа...")
         else:
+            choice = input("1 - Начать мониторинг\n2 - Спарсить все существующие посты\nВыберите действие (1 или 2): ")
+            if choice == "2":
+                logger.info("Выбран режим парсинга существующих постов.")
+                self.client = Client(self.SESSION_NAME, self.config.api_id, self.config.api_hash)
+                await self.client.start()
+                await self.parse_existing_posts()
+                await self.client.stop()
+                logger.success("Парсинг завершен. Все существующие посты добавлены в обработанные.")
+                return
+            
             start_page_input = input("Введите номер страницы для начала проверки (или нажмите Enter для проверки с первой страницы): ")
             try:
                 self.start_page = int(start_page_input) if start_page_input.strip() else 1
