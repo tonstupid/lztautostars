@@ -94,6 +94,7 @@ class Config:
             "processed_posts_file": "processed_posts.json",
             "enable_reply": True,
             "reply_templates": ["Готово! Отправил звезды. ⭐", "Выполнено.", "Сделал.", "+rep"],
+            "skip_posts_with_comments": True,
         }
         with open(self.config_file, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=4, ensure_ascii=False)
@@ -105,7 +106,7 @@ class Config:
     def __getattr__(self, name: str) -> Any:
         if name == "forum_thread_id" and self.cli_thread_id:
             return self.cli_thread_id
-        return self._config_data.get(name)
+        return self._config_data.get(name, True if name == "skip_posts_with_comments" else None)
 
 class ProcessedPostsManager:
     def __init__(self, file_path: str):
@@ -198,6 +199,17 @@ class LolzAPI:
             page += 1
             await asyncio.sleep(1)
         return all_posts
+
+    async def get_post_comments(self, post_id: int) -> List[Dict[str, Any]]:
+        params = {"post_id": post_id}
+        data = await self._request("GET", "/posts/comments", params=params)
+        if data and "comments" in data:
+            return data["comments"]
+        return []
+
+    async def has_comments(self, post_id: int) -> bool:
+        comments = await self.get_post_comments(post_id)
+        return len(comments) > 0
 
     async def create_comment(self, post_id: int, comment_body: str) -> bool:
         payload = {"comment_body": comment_body}
@@ -293,6 +305,12 @@ class TelegramStarsBot:
 
         logger.info(f"Найден новый пост для обработки: ID {post_id}")
         
+        if self.config.skip_posts_with_comments:
+            if await self.lolz_api.has_comments(post_id):
+                logger.info(f"Пост {post_id} уже имеет комментарии. Пропускаю обработку.")
+                self.processed_manager.mark_processed(post_id)
+                return
+        
         post_content = post.get('post_body_html') or post.get('post_body')
         if not post_content:
             logger.warning(f"У поста {post_id} отсутствует содержимое. Пропускаем.")
@@ -387,6 +405,7 @@ class TelegramStarsBot:
 
             logger.info("=" * 40)
             logger.info(f"Комментарии на форуме: {'ВКЛЮЧЕНЫ' if self.config.enable_reply else 'ВЫКЛЮЧЕНЫ'}")
+            logger.info(f"Пропуск постов с комментариями: {'ВКЛЮЧЕН' if self.config.skip_posts_with_comments else 'ВЫКЛЮЧЕН'}")
             logger.info(f"Проверка начинается со страницы: {self.start_page}")
             logger.info("Бот в работе. Для остановки нажмите Ctrl+C.")
             logger.info("=" * 40)
